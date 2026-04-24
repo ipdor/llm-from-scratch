@@ -32,7 +32,6 @@ GPT模型包括：
 attention module 多头注意力模块之前和之后，并且在 final output layer 之前。
 
 
-
 ![image.png](https://raw.githubusercontent.com/ipdor/Pictures/master/20260416215214727.png)
 
 ```python
@@ -47,7 +46,20 @@ out = layer(batch_example) # [2,5] * [5,6] + bias -> ReLU([2,6])
 print(out)
 ```
 
-### 层归一化函数
+### Layer normalization
+
+为什么层归一化这么做？
+
+```python
+mean = x.mean(dim=-1, keepdim=True)
+var = x.var(dim=-1, keepdim=True, unbiased=False)
+norm_x = (x - mean) / torch.sqrt(var)
+```
+
+//to do
+
+
+###  实践中的层归一化函数
 
 ```python
 class LayerNorm(nn.Module):
@@ -200,6 +212,12 @@ LN需要：对**单个样本**内部的**所有 feature** 求均值
 
 ![Activation Function](https://miro.medium.com/v2/resize:fit:1100/format:webp/1*WohYvQmfbeH-yFbprE6jCQ.png)
 
+### Why we need activation functions
+
+![why we need activation functions](https://raw.githubusercontent.com/ipdor/Pictures/master/20260424175704037.png)
+
+如果没有激活函数 activation functions, 就只能做线性匹配。类似图中的分类问题，不能很好地把两种类型的数据分开
+
 
 **激活函数 = 给神经网络加入非线性能力的函数。**
 
@@ -292,6 +310,49 @@ $$SwiGLU(x)=Swish(xW_1​)⊙(xW_2​)$$
 
 ![shortcut connection](https://raw.githubusercontent.com/ipdor/Pictures/master/20260417152146891.png)
 
+
+## 输出层
+
+输出层只包含层归一化和线性输出层
+
+```python
+def forward(self, in_idx):
+  # ....
+  x = self.trf_blocks(x) # 输入 transformer 块中
+
+  # 输出层
+  x = self.final_norm(x) # 层归一化
+  logits = self.out_head(x) # 线性输出层 # [batch_size, seq_len, vocab_size]
+  return logits
+```
+
+### 嵌入层 vs. 输出层
+
+输出层out_head和嵌入层tok_emb为相反操作，一个把token id转换为向量，一个向量转换为id。这两个层的功能刚好相反，因此可以共用权重，这也是课程中 GPT 124M 用的技巧。
+
+但是为什么嵌入层使用 `nn.Embedding` 但是输出层使用 `nn.Linear`?
+
+嵌入层 from vocabulary space to embedding space 的输入是token id，表示对应token在词汇表中的下标。为了转换成向量空间表示，只要对每个标量数字token id 查表，转换为 emb_dim 维的向量即可。
+
+输出层 from embedding space to vocabulary space。它的每个输入元素都是一个 `emb_dim` 维的向量，表示对应token和在 `emb_dim` 维空间中的表示。后续需要转换为 `vocab_size` 维向量，表示该token和词汇表中每个token的关系，数值越大关联性越强。最后只要找到最大数值对应下标的token就是预测的token。因此需要矩阵乘法 `[batch, n, emb_dim] @ [emb_dim, vocab_size]` 得到 `[batch, n, vocab_size]`
+
+
+**AI解释**:
+
+---
+
+虽然这两个层在逻辑上是相反的操作，但使用不同的 PyTorch 层是因为它们处理的输入数据类型不同，且对计算效率的要求不同。
+
+**嵌入层使用 `nn.Embedding` 的原因：**
+模型在输入端接收到的是离散的整数标记 ID。在理论数学上，将一个 ID 转换为向量等同于将其变为长度为 50,257 的独热编码（one-hot encoding）向量后，再与权重矩阵进行乘法运算。然而，直接对包含大量 0 的巨大向量进行矩阵乘法极其消耗资源且低效。`nn.Embedding` 本质上被实现为一个高度优化的“查找表”（lookup table），它直接利用整数 ID 作为索引，从权重矩阵中提取对应的向量行。这种方式完全绕过了复杂的矩阵乘法计算，从而大幅提升了效率。
+
+**输出层使用 `nn.Linear` 的原因：**
+在输出端，模型从 Transformer 块接收到的是密集、连续的上下文浮点向量（例如 768 维），而不再是简单的整数。为了预测序列中的下一个单词，我们必须将这个 768 维的特征向量重新投射到完整的词汇表空间（50,257 维）中，以便为词汇表中的每一个标记生成一个未归一化的概率得分（Logits）。因为这里需要将连续的浮点向量映射到另一个连续的向量空间，我们必须执行完整的矩阵乘法，而 `nn.Linear` 正是专门用于高效执行此类全连接矩阵乘法的网络层。
+
+**补充：权重共享（Weight Tying）**
+有趣的是，尽管这两个层在代码中属于不同的类，但它们的权重矩阵形状完全相同（即均包含 50,257 行和 768 列）。在原始的 GPT-2 架构中，为了大幅减少模型的整体内存占用，实际上在输出层直接复用了嵌入层的同一个权重矩阵，这种巧妙的技术被称为“权重共享”。
+
+---
 
 
 ## nn.Module 和 nn.ModuleList
