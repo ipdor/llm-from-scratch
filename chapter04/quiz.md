@@ -40,6 +40,31 @@ Scaling ensures that the softmax function operates in a region where gradients a
 ```
 
 
+---
+
+In large language models, the embedding dimension ($d_k$) is typically very large, often exceeding 1,000. When you calculate the dot product of two large vectors, the resulting values can grow to be extremely large.
+
+在大型语言模型中，嵌入维度（$d_k$）通常非常大，常常超过 1,000。当你计算两个大型向量的点积时，结果值可以变得非常大。
+
+We pass these dot products into a softmax function to create our attention weights.
+
+我们将这些点积传递给 softmax 函数以创建我们的注意力权重。
+
+If the input numbers are massive, the softmax function behaves almost like a "step function"—it pushes the highest value very close to 1 and forces everything else to 0.
+
+如果输入数字很大，softmax 函数几乎表现得像“阶梯函数”——将最高值推得非常接近 1，并迫使其他所有值接近 0。
+
+When softmax acts like a step function, its mathematical curve becomes almost completely flat. During backpropagation, a flat curve means the gradient is nearing zero. If the gradients are too small, the neural network doesn't know how to efficiently update its weights, causing the learning process to drastically slow down or stagnate completely.
+
+当 softmax 表现得像阶梯函数时，其数学曲线几乎完全平坦。在反向传播过程中，平坦的曲线意味着梯度接近于零。如果梯度太小，神经网络不知道如何有效地更新其权重，导致学习过程大幅减慢或完全停滞。
+
+By dividing the dot product by the square root of the embedding dimension ($\sqrt{d_k}$), we scale those numbers back down to a reasonable range. This keeps the softmax output smooth and maintains healthy gradients so the model can keep learning.
+
+通过将点积除以嵌入维度的平方根（$\sqrt{d_k}$），我们将这些数字缩放到一个合理的范围内。这保持了 softmax 输出的平滑性，并维持了健康的梯度，以便模型可以持续学习。
+
+---
+
+
 4. In a causal attention mechanism, how is the model prevented from 'looking ahead' at future tokens?     
 
 B. By physically removing future tokens from the input tensor during everyforward pass.   

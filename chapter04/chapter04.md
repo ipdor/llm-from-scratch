@@ -7,7 +7,12 @@ tags:
   - DeepLearning
 ---
 
-# 总体架构
+章节主要覆盖内容：
+
+
+![image.png](https://raw.githubusercontent.com/ipdor/Pictures/master/20260415161959247.png)
+
+## 总体架构
 
 GPT模型包括：    
 1. Embedding layer   
@@ -18,11 +23,42 @@ GPT模型包括：
 ![image.png](https://raw.githubusercontent.com/ipdor/Pictures/master/20260415161903894.png)
 
 
-其中Transformer block 包括：   
 
-![image.png](https://raw.githubusercontent.com/ipdor/Pictures/master/20260415161959247.png)
+![alt text](https://raw.githubusercontent.com/ipdor/Pictures/master/20260422221222577.png)
 
-# Layer normalization 层归一化
+
+* 文本分词 Tokenizing text  
+  * 嵌入层 Embedding layer  
+  * 位置层 Positional layer  
+  * Dropout   
+* Transformer 块  
+  * 多头注意力机制 Multihead Attention  
+  * 神经网络 Feed forward（输入输出维度一致，但内部扩大维度）   
+  * （两个模块都分别需要在前后进行进行层归一化和Dropout）
+* 输出层  
+  * 层归一化  
+  * 无bias输出头 out_head ，映射向量
+
+最后需要对输出按概率取对应的 token ID，映射回 Vocabulary，得到预测的单个字符
+
+
+### Transformer block 结构
+
+
+![An illustration of a transformer block](https://raw.githubusercontent.com/ipdor/Pictures/master/20260422214846246.png)
+
+
+Transformer block 的输入输出维度相同。
+
+虽然序列的物理维度（长度和特征大小）在穿过transformer块时保持不变，但每个输出向量的内容被重新编码，以整合来自整个输入序列的上下文信息。
+
+整个block中结合了 `层归一化Layer normalization`, `多头注意力机制MultiHead Attention`，`Dropout`，`Feed Forward` 和`捷径连接shortcut connection`。
+
+* Pre-LayerNorm: 层归一化（LayerNorm）应用于这两个组件的每一个之前，而丢弃法（dropout）应用于它们之后，以对模型进行正则化并防止过拟合。      
+* Post-LayerNorm: 原始的transformer模型，在自注意力和前馈网络之后应用层归一化。这种效果更差。
+
+
+## Layer normalization 层归一化
 
 梯度消失或梯度爆炸 vanishing or exploding gradients 等问题会导致不稳定的训练动态，并使网络难以有效地调整其权重，这意味着学习过程难以找到一组能够最小化损失函数的神经网络参数（权重）。换句话说，网络很难在足够高的程度上学习数据中的潜在模式，从而使其能够做出准确的预测或决策。
 
@@ -382,42 +418,11 @@ def forward(self, in_idx):
 * 无前向传递：与 `nn.Sequential` 不同，`nn.ModuleList` 没有这样的方法。它没有定义层之间的任何内部连接。
 
 
-## GPT架构
-
-![alt text](https://raw.githubusercontent.com/ipdor/Pictures/master/20260422221222577.png)
 
 
-* 文本分词 Tokenizing text  
-  * 嵌入层 Embedding layer  
-  * 位置层 Positional layer  
-  * Dropout   
-* Transformer 块  
-  * 多头注意力机制 Multihead Attention  
-  * 神经网络 Feed forward（输入输出维度一致，但内部扩大维度）   
-  * （两个模块都分别需要在前后进行进行层归一化和Dropout）
-* 输出层  
-  * 层归一化  
-  * 无bias输出头 out_head ，映射向量
+## 独立权重 Vs. 权重绑定
 
-最后需要对输出按概率取对应的 token ID，映射回 Vocabulary，得到预测的单个字符
-
-
-### Transformer block 结构
-
-
-![An illustration of a transformer block](https://raw.githubusercontent.com/ipdor/Pictures/master/20260422214846246.png)
-
-Transformer block 的输入输出维度相同。
-
-虽然序列的物理维度（长度和特征大小）在穿过transformer块时保持不变，但每个输出向量的内容被重新编码，以整合来自整个输入序列的上下文信息。
-
-整个block中结合了 `层归一化Layer normalization`, `多头注意力机制MultiHead Attention`，`Dropout`，`Feed Forward` 和`捷径连接shortcut connection`。
-
-* Pre-LayerNorm: 层归一化（LayerNorm）应用于这两个组件的每一个之前，而丢弃法（dropout）应用于它们之后，以对模型进行正则化并防止过拟合。      
-* Post-LayerNorm: 原始的transformer模型，在自注意力和前馈网络之后应用层归一化。这种效果更差。
-
-
-### 独立权重的性能优于权重绑定
+独立权重的性能优于权重绑定
 
 原始 GPT-2 架构中使用的一种称为权重绑定 `weight tying` 的概念。这意味着原始 GPT-2 架构在输出层  output layer 中重用了 token 嵌入层的权重。本书的GPT模型没有重用权重，所以本章中间计算得到参数数量为 163 million。
 
