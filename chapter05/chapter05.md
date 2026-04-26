@@ -83,8 +83,13 @@ tags:
 
 ## 模型训练
 
+![Train loop](https://raw.githubusercontent.com/ipdor/Pictures/master/20260426172033736.png)
+
+模型训练有八个步骤，从迭代每个 epoch 开始，接着是处理批次、重置梯度、计算损失和新梯度、更新权重，最后以打印损失和生成文本样本等监控步骤结束。
+
+
 目的：   
-模型训练旨在提高与正确目标标记 ID 相对应的索引位置的 `softmax` 概率。（提高生成正确token的概率）
+模型训练旨在提高与正确目标标记 ID 相对应的索引位置的 `softmax` 概率。（提高生成正确token的概率）。实践中是通过交叉熵损失*cross entropy loss*衡量的
 
 
 ```python
@@ -105,9 +110,97 @@ Text 1: tensor([7.4540e-05, 3.1061e-05, 1.1563e-05])
 Text 2: tensor([1.0337e-05, 5.6776e-05, 4.7559e-06])
 ```
 
+### 训练集，验证集
+
+书中附录A A.7 A typical training loop解释了使用验证集（Validation set）的两个主要原因：
+
+1. **调整超参数**：我们在训练过程中会多次使用验证集来寻找最佳的模型设置（如学习率、训练轮数等），以此来优化模型，而不会污染最终只保留作一次性评估的测试集。    
+2. **监控过拟合**：如果在训练时，训练集损失持续下降，但验证集损失却停滞或变大，这就直接说明模型只是在“死记硬背”训练数据（也就是过拟合）。
 
 
+### cross_entropy 参数对shape的要求
 
 
+下面代码为什么报错Expected target size [2, 50257], got [2, 256]。既然报错shape不匹配，为什么flatten之后就可以了，明明logits 元素要比target_batch更多，flatten之后不是应该更混乱吗
+
+```python
+def calc_loss_batch(input_batch, target_batch, model, device):
+    # [2, 256]
+    input_batch = input_batch.to(device)
+    target_batch = target_batch.to(device)
+    # [2, 256, 50257]
+    logits = model(input_batch)
+    loss = torch.nn.functional.cross_entropy(
+        #logits.flatten(0,1), target_batch.flatten()
+        logits, target_batch
+    )
+    return loss
+```
+
+---
+
+#### 根本原因：`cross_entropy` 强制要求 **C（类别数）在第 1 维**
+
+PyTorch 的 `cross_entropy` 接受的 shape 规则是：
+
+| 参数 | 期望 shape |
+|------|-----------|
+| `input` (logits) | `[N, C]` 或 `[N, C, d1, d2, ...]` |
+| `target` | `[N]` 或 `[N, d1, d2, ...]` |
+
+其中 **C 必须永远在第 1 维**，这是硬性规定，不能协商。
+
+规律就一条：**target shape = input shape 去掉 C 那一维**。所以两个变量的其他维度 N, d1, d2, .. 必须完全匹配。
+
+#### 为什么出错
+
+你传入的是：
+```
+logits:  [2, 256, 50257]   → PyTorch 理解为 N=2, C=256, d1=50257
+target:  [2, 256]          → PyTorch 理解为 N=2,        d1=256
+```
+
+PyTorch 把 **256 当成了类别数 C**，然后期望 target 的 d1 维度 = logits 的 d1 维度 = `50257`，所以报错：
+
+```
+Expected target size [2, 50257], got [2, 256]
+```
+
+它根本没意识到 50257 才是词表大小，因为你把它放错位置了。
+
+---
+
+#### 为什么 flatten 之后就对了
+
+```python
+logits.flatten(0, 1)  # [2, 256, 50257] → [512, 50257]
+target.flatten()      # [2, 256]        → [512]
+```
+
+flatten 后：
+```
+logits:  [512, 50257]  → N=512, C=50257  ✅ C 在第 1 维
+target:  [512]         → N=512           ✅ 匹配
+```
+
+现在 **50257（词表大小）终于出现在第 1 维**，PyTorch 才正确识别为类别数。
+
+---
+
+#### 另一种不 flatten 的写法
+
+用 `permute` 把维度换到正确位置：
+
+```python
+# [2, 256, 50257] → [2, 50257, 256]
+loss = torch.nn.functional.cross_entropy(
+    logits.permute(0, 2, 1),  # [N, C, d1] 格式
+    target_batch              # [N, d1] = [2, 256]
+)
+```
+
+两种写法数学上完全等价，flatten 更常见，因为更简洁。
+
+----
 
 
