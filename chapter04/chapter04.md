@@ -337,6 +337,30 @@ $$SwiGLU(x)=Swish(xW_1​)⊙(xW_2​)$$
 - 一条分支作为“门”
 
 
+## FeedForward
+
+
+### 为什么需要FeedForward层
+
+先说Attention干了什么：它本质上是一个**加权求和**——把各个token的Value向量按权重混合。这个操作是线性的，再加上它是跨token做信息汇聚的。
+
+问题来了：线性操作能表达的东西非常有限。你可以把所有信息汇聚到一起，但没有能力对这些信息做复杂的变换和推理。
+
+FeedForward层干的就是这件事：**在每个token位置上，独立地对信息做深度加工**。
+
+结构是：    
+```python
+Linear(emb_dim → 4*emb_dim) → GELU → Linear(4*emb_dim → emb_dim)
+```
+
+注意它先扩张到4倍维度再压回来——这个大的中间空间，是给模型"施展手脚"的地方。有研究发现，FFN层更像是一个**知识存储器**：第一个Linear在"匹配模式"，GELU在"激活匹配到的记忆"，第二个Linear在"读出结果"。
+
+一个直觉：
+- **Attention** = 决定从哪些地方收集信息（跨token的操作）
+- **FeedForward** = 拿到这些信息之后，想清楚该怎么用（单token内的操作）
+
+没有FFN，Transformer就只是在不停地做线性混合，表达能力会非常弱。
+
 
 ## 捷径连接
 
