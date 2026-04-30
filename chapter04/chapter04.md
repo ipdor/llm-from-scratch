@@ -373,6 +373,8 @@ Linear(emb_dim → 4*emb_dim) → GELU → Linear(4*emb_dim → emb_dim)
 
 ## 输出层
 
+![text generation](https://raw.githubusercontent.com/ipdor/Pictures/master/20260430171400402.png)
+
 输出层只包含层归一化和线性输出层
 
 ```python

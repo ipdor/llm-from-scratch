@@ -61,6 +61,7 @@ tags:
 
 <br>
 
+
 ### 交叉熵损失
 
 
@@ -201,6 +202,216 @@ loss = torch.nn.functional.cross_entropy(
 
 两种写法数学上完全等价，flatten 更常见，因为更简洁。
 
-----
+## 文本输出随机性
+
+### 温度缩放
+
+![temperature scale](https://raw.githubusercontent.com/ipdor/Pictures/master/20260428172536056.png)
+
+
+温度缩放本质上就是将 logits 除以一个大于 0 的数字，这个数字被称为**温度（temperature）**
+
+
+```python
+def softmax_with_temperature(logits, temperature):
+    scaled_logits = logits / temperature
+    return torch.softmax(scaled_logits, dim=0)
+```
+
+大于 1 的温度会导致更均匀分布的 token 概率，而小于 1 的温度会导致更自信（更尖锐或更具峰值）的分布。
+
+应用非常小的温度（例如 0.1）将导致更尖锐的分布，使得 multinomial 函数的行为几乎 100% 地选择最可能的 token（这里是 "forward"），这接近于 argmax 函数的行为。    
+同样，温度为 5 会导致更均匀的分布，其中其他 token 被更频繁地选择。这可以为生成的文本增加更多样性，但也更经常导致毫无意义的文本。
+
+
+结合 PyTorch 中的 `multinomial` 采样函数，可以按照温度缩放后的概率分数的概率来选择 token，以增加输出的多样性。
+
+### Top-k sampling
+
+为了提升生成文本之类，减少温度缩放导致的无意义文本，可以通过 Top-k sampling 缩小采样范围。
+
+![topK sampling](https://raw.githubusercontent.com/ipdor/Pictures/master/20260428174821391.png)
+
+In top-k sampling, we can restrict the sampled tokens to the top-k most likely tokens and exclude all other tokens from the selection process by masking their probability scores.    
+在 Top-k 采样中，我们可以将采样范围限制在概率最高的 k 个标记内，并通过屏蔽其他标记的概率分数，将它们从选择过程中排除。
+
+Top-k 方法将所有未选中的 logits 替换为负无穷大值 (-inf)，这样在计算 softmax 值时，非 top-k token 的概率分数为 0，而剩余的概率总和为 1。（和掩码计算的原理相同相同）
+
+
+
+## 训练和推理差异
+
+![text generation](https://raw.githubusercontent.com/ipdor/Pictures/master/20260430171400402.png)
+
+训练阶段每个位置都在预测：   
+"Hello" 对应位置应该预测","      
+"，" 对应位置应该预测"I"     
+"I" 对应位置应该预测"am"   
+...... 
+
+推理阶段只需要预测出结尾一个token "a"
+
+无论训练还是推理，y都是x向后滑动一个窗口的内容。大小都是`context_size`
+
+
+
+
+
+```python
+inputs = torch.tensor([[16833, 3626, 6100],   # ["every effort moves",
+                       [40,    1107, 588]])   #  "I really like"]
+
+targets = torch.tensor([[3626, 6100, 345  ],  # [" effort moves you",
+                        [1107,  588, 11311]]) #  " really like chocolate"]
+```
+
+
+
+![from input text to output text](https://raw.githubusercontent.com/ipdor/Pictures/master/20260425144904485.png)
+
+
+图中"every"预测了"effort"    
+"effort"预测了"moves"   
+"moves"预测了"you"
+
+因此生成 `y_pred = ["effort", "moves", "you"]`
+
+### 生成词的差异
+
+```
+目标数据是输入数据向后slide一个token的数据。关键在于最后一个token，它是模型应该输出的正确数据。（X）
+```
+
+对，这个理解基本是对的。自监督学习，标注就藏在数据本身里，非常elegant。
+
+实际上**每个位置都在同时训练**，不只是最后一个。
+
+比如输入是 `[A, B, C, D]`，target是 `[B, C, D, E]`，那么：
+- 位置0的logit要预测B
+- 位置1的logit要预测C
+- 位置2的logit要预测D
+- 位置3的logit要预测E
+
+cross_entropy在每个位置都算一个loss，最后取平均。**所以一个sequence里有多少个token，就有多少个训练信号**，这也是为什么语言模型训练数据利用率很高。
+
+"最后一个token最关键"这个印象，可能是从推理时来的——推理时确实只看最后一个位置的输出来决定生成什么词。但训练时所有位置都参与。
+
+（理解的差异来自书和作者视频，书和视频中多次提到一次生成一个token。所以误以为训练时也是只看最后生成的token。但实际上并不是，训练和推理不同）
+
+
+
+## 自己的理解
+
+* 梯度到底是个什么东西，backward之后发生了什么
+
+backward是利用pytorch内部的计算图和链式法则，从 dL/dy_pred 一直计算到梯度。
+梯度是gradient，严格来说是dL/dw，dL/db这种loss相对于训练参数的变化率。梯度越大说明受该参数影响越大，梯度为正说明改变方向一致，梯度为负说明loss和参数的改变是反向的。参数每次的更新是 w = w - lr * dL/dw，其中lr是学习率，代表每次向这loss下降的方向走多少。
+
+**为了让loss减小，梯度为正说明w增大会让loss增大，所以要把w往反方向走——w = w - lr * grad，减去一个正数，w变小。梯度的符号告诉你loss的坡往哪边高，参数更新永远往坡低的方向走。**
+
+* loss下降意味着模型内部什么变了
+
+loss改变意味着模型的所有训练参数改变了，包括但不限于把token ID投影到高维空间的嵌入层参数、高维向量映射回词表的输出层参数、多头注意力模型参数、FeedForward层参数等。loss下降说明通过这些参数计算得到的输出token和目标token差距变小，简单来说就是进步了，准确率上升了。
+
+* 为什么训练能work，模型怎么就"学会"了
+
+我理解是1.每次训练后的loss定量衡量了模型输出质量好坏，可以用数学确定训练质量。2.反向传播计算gradient能知道参数对最终loss的影响（正反、大小），结合learning rate可以让参数每次逐渐向loss减小的方向改进。
+
+
+> 第三个问题"为什么训练能work"，你说的是机制层面的答案——loss能衡量质量，梯度能指明方向，所以参数能收敛。这是对的。
+但还有一个更深的问题你没提到，也是目前研究界都没完全想清楚的：
+> 
+> **为什么预测下一个token，能让模型学会推理、翻译、写代码这些东西？**
+> 
+> 训练目标只是"猜下一个词"，但训练出来的模型能做的远超这个。这背后的直觉是：人类写的文本本身就是人类思维的压缩，要在大量文本上持续猜对下一个词，模型被迫内化文本背后的结构、逻辑、知识——不然loss降不下去。预测任务只是表面，真正被优化的是对人类语言和思维模式的建模能力。
+但这只是直觉，没有人能精确解释为什么scale up之后会出现emergent capabilities。这是目前LLM领域最有趣也最开放的问题之一。
+
+
+## 模型保存和加载
+
+### 自己的模型
+
+
+如果只需要加载后推理比较简单，只要保存和加载模型本身权重。
+
+
+```python
+# 保存权重
+torch.save(model.state_dict(), "model.pth")
+
+# 加载权重
+model = GPTModel(GPT_CONFIG_124M)
+model.load_state_dict(torch.load("model.pth", map_location=device))
+model.eval()
+```
+
+如果需要后续训练，还需要优化器的权重参数
+
+
+```python
+# 保存权重，包含模型和优化器状态
+torch.save({
+    "model_state_dict": model.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict(),
+    },
+    "model_and_optimizer.pth"
+)
+
+
+# 加载权重，包含模型和优化器状态
+checkpoint = torch.load("model_and_optimizer.pth", map_location=device)
+model = GPTModel(GPT_CONFIG_124M)
+model.load_state_dict(checkpoint["model_state_dict"])
+optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=0.1)
+optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+model.train()
+```
+
+
+
+### OpenAI 参数
+
+利用作者提供的工具下载参数到本地，读取架构设置settings和模型权重params，然后分别加载。
+
+省略`load_weights_into_gpt`，太长。
+
+参考 [ch05.ipynb](https://github.com/rasbt/LLMs-from-scratch/blob/main/ch05/01_main-chapter-code/ch05.ipynb)
+
+```python
+import urllib.request
+url = (
+    "https://raw.githubusercontent.com/rasbt/"
+    "LLMs-from-scratch/main/ch05/"
+    "01_main-chapter-code/gpt_download.py"
+)
+filename = url.split('/')[-1]
+urllib.request.urlretrieve(url, filename)
+
+
+# 架构设置 settings, 模型权重 params
+from gpt_download import download_and_load_gpt2
+settings, params = download_and_load_gpt2(
+    model_size="124M", models_dir="gpt2"
+)
+
+# 更改架构设置
+model_configs = {
+    "gpt2-small(124M)":{"emb_dim":768, "n_layers":12, "n_heads":12},
+    "gpt2-medium(355M)":{"emb_dim":1024, "n_layers":24, "n_heads":16},
+    "gpt2-large(774M)":{"emb_dim":1280, "n_layers":36, "n_heads":20},
+    "gpt2-xl(1558M)":{"emb_dim":1600, "n_layers":48, "n_heads":25},
+}
+model_name = "gpt2-small(124M)"
+NEW_CONFIG = GPT_CONFIG_124M.copy()
+NEW_CONFIG.update(model_configs[model_name])
+NEW_CONFIG.update({"context_length": 1024})
+NEW_CONFIG.update({"qkv_bias": True})
+gpt = GPTModel(NEW_CONFIG)
+gpt.eval()
+
+# load_weights_into_gpt函数省略，太长
+load_weights_into_gpt(gpt, params)
+gpt.to(device)
+```
 
 
