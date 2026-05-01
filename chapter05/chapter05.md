@@ -204,12 +204,27 @@ loss = torch.nn.functional.cross_entropy(
 
 ## 文本输出随机性
 
+为了避免对相同的输入文本永远输出一样的内容，需要引入不确定性。可以使用`torch.multinomial`根据概率分布抽样。温度缩放和top-k是两种处理随机性的技术
+
+* 温度控制是对`logits`进行处理，然后再执行`softmax`,`torch.multinomial`等不确定地输出next token
+
+`Temperature`比较小时， 分布更加集中，原本概率比较高的选择概率会更高；       
+`Temperature`比较大时， 分布更均匀，概率高的变低，低的变高，“劫富济贫”。
+
+* Top-K是为了避免选择概率低到某种程度的token id，导致输出无意义的字符。
+
+这种做法和通过不确定性引入多样性输出是相反的，属于一种trade-off
+
+
 ### 温度缩放
 
 ![temperature scale](https://raw.githubusercontent.com/ipdor/Pictures/master/20260428172536056.png)
 
 
+
+
 温度缩放本质上就是将 logits 除以一个大于 0 的数字，这个数字被称为**温度（temperature）**
+
 
 
 ```python
