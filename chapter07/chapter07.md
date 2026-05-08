@@ -21,7 +21,9 @@ Roadmap:
 2. 微调LLM    
 3. 评估LLM
 
-## 为监督指令微调准备数据集
+## 准备数据集
+
+### 数据格式化
 
 指令微调涉及在输入-输出对的数据集上训练模型，有不同的方法对记录进行格式化，图7.4是其中两种。
 
@@ -30,7 +32,7 @@ Roadmap:
 大型语言模型指令微调中提示风格的比较。Alpaca风格（左侧）采用结构化格式，为指令、输入和响应设置了明确的区域；而Phi-3风格（右侧）则使用更简洁的格式，通过指定的`<|user|>`和`<|assistant|>`标记来实现。
 
 
-## 批处理
+### 批处理
 
 指令微调的批处理过程要稍微复杂一些，需要我们创建自定义的 `collate` 函数，稍后我们将其插入到 `DataLoader` 中。我们实现这个自定义的 `collate` 函数，是为了处理我们的指令微调数据集的特定要求和格式。
 
@@ -43,7 +45,7 @@ Roadmap:
 * (2.4) 创建目标 token IDs，以及     
 * (2.5) 替换 -100 占位符标记，以在损失函数中屏蔽填充标记。
 
-## 填充方案
+
 
 ![sophisticated padding approach](https://raw.githubusercontent.com/ipdor/Pictures/master/20260507183106749.png)
 
@@ -176,6 +178,85 @@ loss_1 == loss_3: tensor(True)
 2405.14394)
 
 
+### 创建 data loaders
+
+和以前的方案主要有3点不同：
+
+1. 函数内进行数据移动    
+    之前是在训练的主循环中把数据移动到设备，现在在`collate`函数内移动，可以在训练循环之外作为后台进程执行此设备传输过程，从而防止其在模型训练期间阻塞 GPU。   
+    也因为这个原因，需要传入`device`参数到`collate`函数内。
+    
+
+2. 为 `collate` 函数生成新的函数   
+
+使用`partial`把`custom_collate_fn`转换为只接受一个参数的`customized_collate_fn`
+
+```python
+customized_collate_fn(batch)
+```
+
+```python
+from functools import partial
+# 直接把 custom_collate_fn 传入dataloader的话，pytorch不会自动传入那么多参数，只有第一个参数batch
+customized_collate_fn = partial(
+    custom_collate_fn, 
+    device = device,
+    allowed_max_length = 1024
+)
+```
+
+3. 创建 data loader 时使用自定义的 `collate` 函数
+
+```python
+train_loader = DataLoader(
+    train_dataset,
+    batch_size = batch_size,
+    collate_fn = customized_collate_fn, # 使用自定义的 customized_collate_fn 函数，其他val_loader, test_loader类似
+    shuffle = True,
+    drop_last = True,
+    num_workers=num_workers
+)
+```
+
+## 模型微调
+
+指令微调的训练过程和之前的逻辑相同，可以直接复用代码
+
+训练过程中的loss随输入token(seen tokens)的数量变化如下：
+
+![training loss](https://raw.githubusercontent.com/ipdor/Pictures/master/20260508151402549.png)
+
+
+## 模型评估
+
+### 准备数据
+
+评估指令微调模型最好的办法是人工评估，但是人工评估费力而且耗时。因此，考虑到任务的规模，我们将实现一种类似于自动对话基准测试的方法，即使用另一个 LLM 自动评估回复。
+
+在评估中使用定制的数据集，而非公共数据集。具体做法是使用测试数据生成回复，然后用模型回复覆盖测试数据中的response。这样测试数据就变成了模型的输入输出。
+
+```python
+from tqdm import tqdm # Python 进度条库
+
+# 遍历 test_data, 把模型生成的回答放入test_data的model_response中, 相当于把测试数据的输入输出持久化
+for i, entry in tqdm(enumerate(test_data), total=len(test_data)): # 相当于告诉tqdm一共有多少条记录，当前第多少条。这样才能计算、显示进度
+    input_text = format_input(entry)
+    # print(input_text)
+    token_ids = generate(
+        model=model,
+        idx=text_to_token_ids(input_text, tokenizer).to(device),
+        max_new_tokens=256,
+        context_size=BASE_CONFIG["context_length"],
+        eos_id=50256
+    )
+    generated_text = token_ids_to_text(token_ids, tokenizer)
+
+    response_text = (generated_text[len(input_text):].replace("### Response:", "").strip())
+    test_data[i]["model_response"] = response_text
+
+    with open("instrucction-data-with-response.json", "w") as file:
+        json.dump(test_data, file, indent=4)
+```
 
 
 
