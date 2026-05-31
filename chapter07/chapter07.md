@@ -229,11 +229,13 @@ train_loader = DataLoader(
 
 ## 模型评估
 
-### 准备数据
 
 评估指令微调模型最好的办法是人工评估，但是人工评估费力而且耗时。因此，考虑到任务的规模，我们将实现一种类似于自动对话基准测试的方法，即使用另一个 LLM 自动评估回复。
 
-在评估中使用定制的数据集，而非公共数据集。具体做法是使用测试数据生成回复，然后用模型回复覆盖测试数据中的response。这样测试数据就变成了模型的输入输出。
+
+### 准备数据
+
+首先需要准备被评估的数据。在评估中使用定制的数据集，而非公共数据集。具体做法是使用测试数据生成回复，然后用模型回复覆盖测试数据中的response。这样测试数据就变成了模型的输入输出。
 
 ```python
 from tqdm import tqdm # Python 进度条库
@@ -258,8 +260,48 @@ for i, entry in tqdm(enumerate(test_data), total=len(test_data)): # 相当于告
         json.dump(test_data, file, indent=4)
 ```
 
+### 调用模型
 
+使用Colab内存/显存应该不够加载两个大模型，要么自己调用API模型，要么在新笔记本中运行LLama3.1。
 
+这里使用调用API的方式。2026年Llama3模型已经过时了，很多平台把它下线了，只能用其他模型。这里用API调用硅基流动提供的Deepseek V4 Flash。
+
+Colab服务器应该在国外，调用硅基流动api速度比较慢。因此加了超时时间和重试次数
+
+```python
+from openai import OpenAI
+
+def query_model(
+    prompt,
+    model="deepseek-ai/deepseek-v4-flash",
+    url="https://api.siliconflow.cn/v1",
+    max_retries=5,
+    timeout=20  # 超时秒数
+):
+    client = OpenAI(
+    api_key=API_KEY,
+    base_url=url,
+    timeout=timeout,
+    )
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=2048,  # 只返回分数，不需要2048
+                seed=123
+            )
+            return response.choices[0].message.content
+        
+        except Exception as e:
+            wait = 2 ** attempt  # 指数退避：1s, 2s, 4s
+            print(f"\nAttempt {attempt+1} failed: {e}. Retrying in {wait}s...")
+            time.sleep(wait)
+    
+    print(f"\nAll {max_retries} attempts failed, skipping.")
+    return None
+```
 
 
 
